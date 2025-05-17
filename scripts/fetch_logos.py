@@ -15,19 +15,15 @@ if not api_key:
 tmdb.api_key = api_key
 
 # Patrones
-year_pattern = re.compile(r"\s+(\d{4})$")
-extinf_pattern = re.compile(r"^(#EXTINF:[^,]*,)(.*)")
-logo_pattern = re.compile(r'tvg-logo="(.*?)"')
-group_pattern = re.compile(r'group-title=".*?"')
-tvg_name_pattern = re.compile(r'tvg-name=".*?"')
+YEAR_PATTERN = re.compile(r"\s+(\d{4})$")
+EXTINF_PATTERN = re.compile(r"^(#EXTINF:[^,]*,)(.*)")
+LOGO_PATTERN = re.compile(r'tvg-logo="(.*?)"')
+GROUP_PATTERN = re.compile(r'group-title=".*?"')
+TVG_NAME_PATTERN = re.compile(r'tvg-name=".*?"')
 
 # Función para extraer título y año raw
 def normalize_title(raw):
-    """
-    Separa el título y el año de `raw`:
-    'Zootopia 2016' -> ('Zootopia', '2016')
-    """
-    m = year_pattern.search(raw)
+    m = YEAR_PATTERN.search(raw)
     if m:
         title = raw[:m.start()].strip()
         year = m.group(1)
@@ -57,10 +53,15 @@ def fetch_spanish_wiki_title(eng_title):
 
 # Función para obtener datos TMDb
 def fetch_tmdb_info(title):
-    results = Movie().search(title)
-    if not results:
+    # Buscar en TMDb (inglés)
+    search = Movie()
+    result_page = search.search(title)
+    # result_page es un objeto con atributo results
+    movies = getattr(result_page, 'results', result_page)
+    if not movies:
         return None
-    m = results[0]
+    m = movies[0]
+    # Obtener detalles en Inglés por defecto
     try:
         details = Movie().details(m.id)
     except Exception:
@@ -69,7 +70,7 @@ def fetch_tmdb_info(title):
     genre = ''
     if details and getattr(details, 'genres', None):
         genre = details.genres[0]['name']
-    logo = f"https://image.tmdb.org/t/p/w500{m.poster_path}" if m.poster_path else ''
+    logo = f"https://image.tmdb.org/t/p/w500{m.poster_path}" if getattr(m, 'poster_path', None) else ''
     return {'genre': genre, 'logo': logo}
 
 # Procesar M3U
@@ -80,15 +81,15 @@ def process_m3u(path, verbose=False):
     with open(path, 'r', encoding='utf-8') as f:
         for line in f:
             if line.startswith('#EXTINF'):
-                extinf_match = extinf_pattern.match(line)
+                extinf_match = EXTINF_PATTERN.match(line)
                 if not extinf_match:
                     output.append(line)
                     continue
                 extinf_prefix, raw = extinf_match.groups()
                 title_raw = raw.strip()
 
-                logo_match = logo_pattern.search(line)
-                orig_logo = logo_match.group(1) if logo_match else None
+                orig_logo = LOGO_PATTERN.search(line)
+                orig_logo = orig_logo.group(1) if orig_logo else None
 
                 if verbose:
                     print(f"Procesando: raw_title='{title_raw}', orig_logo='{orig_logo}'")
@@ -110,9 +111,9 @@ def process_m3u(path, verbose=False):
                     logo_attr = f'tvg-logo="{info["logo"]}"'
 
                     # Reconstruir línea
-                    line = line.replace('tvg-name=""', f'tvg-name="{eng_name}"')
-                    line = re.sub(logo_pattern, logo_attr, line)
-                    line = re.sub(group_pattern, f'group-title="{group}"', line)
+                    line = TVG_NAME_PATTERN.sub(f'tvg-name="{eng_name}"', line)
+                    line = LOGO_PATTERN.sub(logo_attr, line)
+                    line = GROUP_PATTERN.sub(f'group-title="{group}"', line)
 
                     prefix = line.split(',', 1)[0]
                     line = f"{prefix},{final_title}\n"
@@ -134,3 +135,4 @@ if __name__ == '__main__':
         print("Uso: python fetch_logos.py <ruta/a/tu_playlist.m3u> [--verbose]")
         sys.exit(1)
     process_m3u(sys.argv[1], verbose='--verbose' in sys.argv)
+
