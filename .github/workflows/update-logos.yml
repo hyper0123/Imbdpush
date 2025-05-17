@@ -1,12 +1,8 @@
 name: Update M3U Logos
 
-# Permisos globales para el GITHUB_TOKEN
-defaults:
-  run:
-    shell: bash
-
+# Dar permisos de escritura al token
 permissions:
-  contents: write  # permite push con GITHUB_TOKEN
+  contents: write
 
 on:
   workflow_dispatch: {}
@@ -21,13 +17,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          persist-credentials: true  # habilita uso de GITHUB_TOKEN
-
-      - name: Show TMDB_API_KEY (DEBUG)
-        run: |
-          echo "TMDB_API_KEY=${TMDB_API_KEY}"
-        env:
-          TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
+          persist-credentials: true  # usa GITHUB_TOKEN para push
 
       - name: Set up Python
         uses: actions/setup-python@v4
@@ -37,13 +27,13 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install tmdbv3api
+          pip install tmdbv3api pyyaml
 
       - name: Fetch and inject logos
         env:
           TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
         run: |
-          python scripts/fetch_logos.py playlists/your_playlist.m3u
+          python scripts/fetch_logos.py playlists/your_playlist.m3u --verbose
 
       - name: Commit updated playlist
         run: |
