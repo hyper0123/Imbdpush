@@ -13,21 +13,46 @@ tmdb = TMDb()
 tmdb.api_key = env_api_key
 
 # Patrones para parsing
-extinf_pattern = re.compile(r'^#EXTINF:-1(.*),(.*)$')
-year_pattern = re.compile(r'\s+(\d{4})$')
+EXTINF_LINE = re.compile(r'^#EXTINF:-1(.*),(.*)$')
+YEAR_PATTERN = re.compile(r'\s+(\d{4})$')
 
 # Funciones auxiliares
 def normalize_and_extract_year(raw: str) -> tuple[str, str]:
-    m = year_pattern.search(raw)
+    m = YEAR_PATTERN.search(raw)
     if m:
         year = m.group(1)
-        title = year_pattern.sub('', raw).strip()
+        title = YEAR_PATTERN.sub('', raw).strip()
         return title, year
     return raw, ''
 
-def base_title(title_no_year: str) -> str:
-    """Extrae título base eliminando números secuela al final"""
-    return re.sub(r'\s+\d+$', '', title_no_year)
+# Función de agrupación y ordenación
+
+def sort_same_name(entries):
+    """
+    Ordena grupos de películas con mismo base name por año ascendente.
+    entries: lista de tuplas (extinf_line, url_line, title_no_year, year)
+    """
+    def base_name(title):
+        # Quita sufijo numérico (p.ej. '2', 'III') al final
+        return re.sub(r'\s*\d+$', '', title).strip()
+
+    # Agrupar por base name
+groups = {}
+for e in entries:
+    bn = base_name(e[2])
+    groups.setdefault(bn, []).append(e)
+
+sorted_entries = []
+handled = set()
+for bn, group in groups.items():
+    if len(group) > 1:
+        # Ordenar por año
+        sorted_group = sorted(group, key=lambda x: int(x[3] or 0))
+        sorted_entries.extend(sorted_group)
+    else:
+        sorted_entries.append(group[0])
+
+return sorted_entries
 
 # Obtener datos de TMDb
 def fetch_movie_data(search_title: str) -> dict | None:
@@ -50,87 +75,77 @@ def fetch_movie_data(search_title: str) -> dict | None:
         print(f"Error TMDb al buscar '{search_title}': {e}")
         return None
 
-# Proceso principal de M3U con ordenamiento
+# Procesar playlist M3U
 def process_m3u(path: str, verbose: bool = False) -> None:
-    # Leer todas las líneas
+    header_lines = []
+    entries = []  # Tuplas de (extinf_line, url_line, title_no_year, year)
+
+    # Leer y parsear
     with open(path, 'r', encoding='utf-8') as f:
         lines = f.readlines()
 
-    # Mantener cabecera hasta primera EXTINF
-    header = []
-    idx = 0
-    while idx < len(lines) and not lines[idx].startswith('#EXTINF'):
-        header.append(lines[idx])
-        idx += 1
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        if line.startswith('#EXTINF'):
+            m = EXTINF_LINE.match(line.strip())
+            if m and i+1 < len(lines):
+                attrs, raw_title = m.group(1), m.group(2)
+                url_line = lines[i+1]
 
-    # Parsear entradas en pares: extinf y URL
-    entries = []
-    while idx < len(lines):
-        if lines[idx].startswith('#EXTINF'):
-            ext_line = lines[idx].strip()
-            url_line = lines[idx+1] if idx+1 < len(lines) else ''
-            entries.append((ext_line, url_line))
-            idx += 2
-        else:
-            # líneas sueltas
-            header.append(lines[idx])
-            idx += 1
+                # Extraer atributos originales
+                orig_id = re.search(r'tvg-id="(.*?)"', attrs)
+                orig_logo = re.search(r'tvg-logo="(.*?)"', attrs)
+                orig_group = re.search(r'group-title="(.*?)"', attrs)
+                id_val = orig_id.group(1) if orig_id else ''
+                logo_val = orig_logo.group(1) if orig_logo else ''
+                group_val = orig_group.group(1) if orig_group else ''
 
-    processed = []
-    # Procesar cada entrada
-    for ext_line, url_line in entries:
-        m = extinf_pattern.match(ext_line)
-        if not m:
-            continue
-        attrs, raw_title = m.group(1), m.group(2)
-        # Extraer atributos
-        orig_id = re.search(r'tvg-id="(.*?)"', attrs)
-        orig_group = re.search(r'group-title="(.*?)"', attrs)
-        orig_logo = re.search(r'tvg-logo="(.*?)"', attrs)
-        orig_id = orig_id.group(1) if orig_id else ''
-        orig_group = orig_group.group(1) if orig_group else ''
-        orig_logo = orig_logo.group(1) if orig_logo else ''
+                # Normalizar título y extraer año
+                title_no_year, year = normalize_and_extract_year(raw_title)
+                search_title = title_no_year
+                if verbose:
+                    print(f"Procesando raw='{raw_title}', search='{search_title}', grupo original='{group_val}'")
 
-        # Normalizar título y extraer año
-        title_no_year, year = normalize_and_extract_year(raw_title)
-        search_title = title_no_year
-        # Fetch datos
-        data = fetch_movie_data(search_title)
-        if data:
-            poster = data['poster']
-            genre = data['genre'] or orig_group
-            title_en = data['title_en']
-        else:
-            poster = orig_logo
-            genre = orig_group
-            title_en = title_no_year
+                data = fetch_movie_data(search_title)
+                if data:
+                    poster = data['poster']
+                    genre = data['genre'] or group_val
+                    title_en = data['title_en']
+                    display = f"{title_no_year} ({year})" if year else title_no_year
 
-        # Preparar display y attrs_new
-        display = f"{title_no_year} ({year})" if year else title_no_year
-        final_group = genre if not orig_group or orig_group.lower()=='undefined' else orig_group
-        attrs_new = (
-            f' tvg-name="{title_en}"'
-            f' tvg-id="{orig_id}"'
-            f' tvg-logo="{poster}"'
-            f' group-title="{final_group}"'
-        )
-        new_ext = f"#EXTINF:-1{attrs_new},{display}"
-        processed.append({'base': base_title(title_no_year), 'year': int(year) if year.isdigit() else 0,
-                          'ext': new_ext, 'url': url_line.strip()})
+                    # Determinar group-title final
+                    final_group = genre if not group_val or group_val.lower() == 'undefined' else group_val
 
-    # Ordenar: por base title, luego año asc
-    processed.sort(key=lambda x: (x['base'].lower(), x['year']))
+                    attrs_new = (
+                        f' tvg-name="{title_en}"'
+                        f' tvg-id="{id_val}"'
+                        f' tvg-logo="{poster}"'
+                        f' group-title="{final_group}"'
+                    )
+                    extinf_line = f"#EXTINF:-1{attrs_new},{display}\n"
+                    entries.append((extinf_line, url_line, title_no_year, year))
+                    updated = True
+                    i += 2
+                    continue
+        # Si no es EXTINF o no aplica, conservar en header/otros
+        header_lines.append(line)
+        i += 1
+
+    # Ordenar sólo los que comparten mismo base name
+    entries = sort_same_name(entries)
 
     # Escribir de nuevo
     with open(path, 'w', encoding='utf-8') as f:
-        f.writelines(header)
-        f.write('#EXTM3U\n' if '#EXTM3U' not in ''.join(header) else '')
-        for item in processed:
-            f.write(item['ext'] + '\n')
-            f.write(item['url'] + '\n')
+        for hl in header_lines:
+            f.write(hl)
+        for extinf, url, *_ in entries:
+            f.write(extinf)
+            f.write(url)
 
 if __name__ == '__main__':
-    if len(sys.argv)<2:
-        print("Uso: python fetch_logos.py <playlist.m3u> [--verbose]")
+    if len(sys.argv) < 2:
+        print("Uso: python fetch_logos.py <ruta/a/tu_playlist.m3u> [--verbose]")
         sys.exit(1)
-    process_m3u(sys.argv[1], verbose='--verbose' in sys.argv)
+    verbose_flag = '--verbose' in sys.argv
+    process_m3u(sys.argv[1], verbose_flag)
