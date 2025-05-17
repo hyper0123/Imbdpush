@@ -1,7 +1,7 @@
 import os
 import re
 import sys
-from tmdbv3api import TMDb, Movie, TMDbException
+from tmdbv3api import TMDb, Movie
 
 # Inicializar TMDb
 tmdb = TMDb()
@@ -19,6 +19,7 @@ MOVIE_LINE_RE = re.compile(
 
 
 def fetch_logo_url(title):
+    """Busca en TMDb el primer resultado de la película y devuelve la URL del póster"""
     try:
         search = Movie()
         results = search.search(title)
@@ -26,8 +27,8 @@ def fetch_logo_url(title):
             poster = results[0].poster_path
             if poster:
                 return f"https://image.tmdb.org/t/p/w500{poster}"
-    except TMDbException as e:
-        print(f"TMDbException buscando '{title}': {e}")
+    except Exception as e:
+        print(f"Error buscando '{title}': {e}")
     return None
 
 
