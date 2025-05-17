@@ -15,121 +15,99 @@ if not api_key:
 tmdb.api_key = api_key
 
 # Patrones
-YEAR_PATTERN = re.compile(r"\s+(\d{4})$")
-EXTINF_PATTERN = re.compile(r"^(#EXTINF:[^,]*,)(.*)")
-LOGO_PATTERN = re.compile(r'tvg-logo="(.*?)"')
-GROUP_PATTERN = re.compile(r'group-title=".*?"')
-TVG_NAME_PATTERN = re.compile(r'tvg-name=".*?"')
+year_pattern = re.compile(r"\s+(\d{4})$")
+extinf_pattern = re.compile(r"^#EXTINF:[^,]*,(.*)")
 
 # Función para extraer título y año raw
 def normalize_title(raw):
-    m = YEAR_PATTERN.search(raw)
+    m = year_pattern.search(raw)
     if m:
-        title = raw[:m.start()].strip()
-        year = m.group(1)
-    else:
-        title = raw.strip()
-        year = ''
-    return title, year
+        return raw[:m.start()].strip(), m.group(1)
+    return raw.strip(), ''
 
-# Función para traducir título vía Wikipedia ES
+# Función para obtener título en Español (Wikipedia langlinks)
 def fetch_spanish_wiki_title(eng_title):
-    url = "https://es.wikipedia.org/w/api.php"
+    url = "https://en.wikipedia.org/w/api.php"
     params = {
         'action': 'query',
-        'list': 'search',
-        'srsearch': eng_title,
-        'format': 'json',
-        'srlimit': 1
+        'titles': eng_title,
+        'prop': 'langlinks',
+        'lllang': 'es',
+        'format': 'json'
     }
     try:
         resp = requests.get(url, params=params, timeout=5).json()
-        hits = resp.get('query', {}).get('search', [])
-        if hits:
-            return hits[0]['title']
+        pages = resp.get('query', {}).get('pages', {})
+        for page in pages.values():
+            langlinks = page.get('langlinks')
+            if langlinks:
+                return langlinks[0]['*']
     except Exception:
         pass
     return None
 
-# Función para obtener datos TMDb
+# Función para obtener datos TMDb (género en español y logo)
 def fetch_tmdb_info(title):
-    # Buscar en TMDb (inglés)
     search = Movie()
-    result_page = search.search(title)
-    # result_page es un objeto con atributo results
-    movies = getattr(result_page, 'results', result_page)
-    if not movies:
+    results = search.search(title)
+    if not results:
         return None
-    m = movies[0]
-    # Obtener detalles en Inglés por defecto
+    m = results[0]
+    # Detalles en español para género localizado
     try:
-        details = Movie().details(m.id)
+        details_es = Movie().details(m.id, language='es')
+        genre = details_es.genres[0]['name'] if details_es.genres else ''
     except Exception:
-        details = None
-
-    genre = ''
-    if details and getattr(details, 'genres', None):
-        genre = details.genres[0]['name']
-    logo = f"https://image.tmdb.org/t/p/w500{m.poster_path}" if getattr(m, 'poster_path', None) else ''
-    return {'genre': genre, 'logo': logo}
+        genre = ''
+    logo_url = f"https://image.tmdb.org/t/p/w500{m.poster_path}" if getattr(m, 'poster_path', None) else ''
+    return {'genre': genre or 'undefined', 'logo': logo_url}
 
 # Procesar M3U
-def process_m3u(path, verbose=False):
-    output = []
+def process_m3u(path: str, verbose: bool = False):
+    lines_out = []
     updated = False
-
     with open(path, 'r', encoding='utf-8') as f:
         for line in f:
             if line.startswith('#EXTINF'):
-                extinf_match = EXTINF_PATTERN.match(line)
-                if not extinf_match:
-                    output.append(line)
-                    continue
-                extinf_prefix, raw = extinf_match.groups()
-                title_raw = raw.strip()
-
-                orig_logo = LOGO_PATTERN.search(line)
-                orig_logo = orig_logo.group(1) if orig_logo else None
-
+                # Extraer título raw tras la coma
+                raw_title = extinf_pattern.match(line).group(1).strip()
+                eng_name, year = normalize_title(raw_title)
                 if verbose:
-                    print(f"Procesando: raw_title='{title_raw}', orig_logo='{orig_logo}'")
+                    print(f"Original: '{raw_title}' -> Eng: '{eng_name}', Year: '{year}'")
 
-                if not orig_logo:
-                    eng_name, year = normalize_title(title_raw)
-                    info = fetch_tmdb_info(eng_name)
-                    if not info:
-                        output.append(line)
-                        continue
+                # Obtener info
+                info = fetch_tmdb_info(eng_name)
+                if not info:
+                    lines_out.append(line)
+                    continue
 
-                    es_title = fetch_spanish_wiki_title(eng_name)
-                    if es_title:
-                        final_title = f"{es_title} ({year})" if year else es_title
-                    else:
-                        final_title = f"{eng_name} ({year})" if year else eng_name
+                # Traducir nombre
+                es_title = fetch_spanish_wiki_title(eng_name)
+                if es_title:
+                    final_title = f"{es_title} ({year})" if year else es_title
+                else:
+                    final_title = f"{eng_name} ({year})" if year else eng_name
 
-                    group = info['genre'] or 'undefined'
-                    logo_attr = f'tvg-logo="{info["logo"]}"'
-
-                    # Reconstruir línea
-                    line = TVG_NAME_PATTERN.sub(f'tvg-name="{eng_name}"', line)
-                    line = LOGO_PATTERN.sub(logo_attr, line)
-                    line = GROUP_PATTERN.sub(f'group-title="{group}"', line)
-
-                    prefix = line.split(',', 1)[0]
-                    line = f"{prefix},{final_title}\n"
-
-                    if verbose:
-                        print(f" -> tvg-name='{eng_name}', group='{group}', final_title='{final_title}'")
-                    updated = True
-            output.append(line)
-
+                # Construir línea EXTINF completa
+                logo_attr  = info['logo']
+                group_attr = info['genre']
+                new_line = (f"#EXTINF:-1 tvg-name=\"{eng_name}\" tvg-id=\"\" "
+                            f"tvg-logo=\"{logo_attr}\" group-title=\"{group_attr}\","  
+                            f"{final_title}\n")
+                lines_out.append(new_line)
+                if verbose:
+                    print(f" -> {new_line.strip()}")
+                updated = True
+            else:
+                lines_out.append(line)
     if updated:
         with open(path, 'w', encoding='utf-8') as f:
-            f.writelines(output)
+            f.writelines(lines_out)
+        if verbose:
+            print("Archivo actualizado con nuevos datos.")
     elif verbose:
-        print("No changes.")
+        print("No se realizaron cambios.")
 
-# Entrada principal
 if __name__ == '__main__':
     if len(sys.argv) < 2:
         print("Uso: python fetch_logos.py <ruta/a/tu_playlist.m3u> [--verbose]")
