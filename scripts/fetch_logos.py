@@ -4,10 +4,7 @@ import sys
 from tmdbv3api import TMDb, Movie
 
 # Inicializar TMDb
-
 tmdb = TMDb()
-# La clave se toma del secreto de GitHub Actions
-
 tmdb.api_key = os.getenv('TMDB_API_KEY')
 
 # Expresión para extraer cada línea EXTINF de tu M3U
