@@ -4,13 +4,13 @@ import sys
 from tmdbv3api import TMDb, Movie
 
 # Inicializar TMDb
-api_key = os.getenv('TMDB_API_KEY')
-if not api_key:
+env_api_key = os.getenv('TMDB_API_KEY')
+if not env_api_key:
     print("ERROR: la variable TMDB_API_KEY no está definida")
     sys.exit(1)
 
 tmdb = TMDb()
-tmdb.api_key = api_key
+tmdb.api_key = env_api_key
 
 # Patrones para parsing
 EXTINF_LINE = re.compile(r'^#EXTINF:-1(.*),(.*)$')
@@ -31,21 +31,23 @@ def normalize_and_extract_year(raw: str) -> tuple[str, str]:
 
 
 def fetch_movie_data(search_title: str):
-    """Busca película en TMDb, devuelve dict con poster URL, primer género (es), título original."""
+    """Busca película en TMDb y devuelve póster, primer género en español y título original."""
     try:
+        # Buscar con idioma inglés para obtener original_title
+        tmdb.language = 'en-US'
         results = Movie().search(search_title)
         if not results:
             return None
         movie = results[0]
-        # Datos básicos
-        movie_id = movie.id
-        poster_path = movie.poster_path
-        poster_url = f"https://image.tmdb.org/t/p/w500{poster_path}" if poster_path else ''
-        title_en = getattr(movie, 'original_title', movie.title)
+        poster_url = f"https://image.tmdb.org/t/p/w500{movie.poster_path}" if movie.poster_path else ''
+        title_en = movie.original_title or movie.title
+
         # Obtener géneros en español
-        details_es = Movie().details(movie_id, language='es-ES')
-        genres = getattr(details_es, 'genres', []) or []
-        genre_name = genres[0]['name'] if genres else ''
+        tmdb.language = 'es-ES'
+        details = Movie().details(movie.id)
+        genre_list = getattr(details, 'genres', []) or []
+        genre_name = genre_list[0]['name'] if genre_list else ''
+
         return {
             'poster': poster_url,
             'genre': genre_name,
@@ -58,7 +60,7 @@ def fetch_movie_data(search_title: str):
 
 def process_m3u(path: str, verbose: bool = False) -> None:
     updated = False
-    lines_out = []
+    output_lines: list[str] = []
 
     with open(path, 'r', encoding='utf-8') as f:
         for line in f:
@@ -66,11 +68,11 @@ def process_m3u(path: str, verbose: bool = False) -> None:
                 m = EXTINF_LINE.match(line.strip())
                 if m:
                     attrs, raw_title = m.group(1), m.group(2)
-                    # Extraer id, logo del bloque attrs
-                    id_match = re.search(r'tvg-id="(.*?)"', attrs)
-                    logo_match = re.search(r'tvg-logo="(.*?)"', attrs)
-                    orig_id = id_match.group(1) if id_match else ''
-                    raw_logo = logo_match.group(1) if logo_match else ''
+                    # Extraer id y logo
+                    orig_id = re.search(r'tvg-id="(.*?)"', attrs)
+                    orig_logo = re.search(r'tvg-logo="(.*?)"', attrs)
+                    orig_id = orig_id.group(1) if orig_id else ''
+                    orig_logo = orig_logo.group(1) if orig_logo else ''
 
                     # Normalizar título y año
                     title_no_year, year = normalize_and_extract_year(raw_title)
@@ -78,31 +80,30 @@ def process_m3u(path: str, verbose: bool = False) -> None:
                     if verbose:
                         print(f"Buscando: raw='{raw_title}', search='{search_title}'")
 
-                    # Obtener datos TMDb
                     data = fetch_movie_data(search_title)
                     if data:
-                        new_logo = data['poster']
+                        # Construir nueva línea EXTINF
+                        poster = data['poster']
                         genre = data['genre']
                         title_en = data['title_en']
-                        # Construir nueva línea EXTINF
                         display = f"{title_no_year} ({year})" if year else title_no_year
                         attrs_new = (
                             f' tvg-name="{title_en}"'
                             f' tvg-id="{orig_id}"'
-                            f' tvg-logo="{new_logo}"'
+                            f' tvg-logo="{poster}"'
                             f' group-title="{genre}"'
                         )
                         new_line = f"#EXTINF:-1{attrs_new},{display}\n"
-                        lines_out.append(new_line)
+                        output_lines.append(new_line)
                         if verbose:
                             print(f" -> Nueva línea: {new_line.strip()}")
                         updated = True
-                        continue  # skip original line
-            lines_out.append(line)
+                        continue
+            output_lines.append(line)
 
     if updated:
         with open(path, 'w', encoding='utf-8') as f:
-            f.writelines(lines_out)
+            f.writelines(output_lines)
     elif verbose:
         print("No hubo cambios.")
 
