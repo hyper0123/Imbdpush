@@ -7,22 +7,19 @@ from tmdbv3api import TMDb, Movie
 tmdb = TMDb()
 tmdb.api_key = os.getenv('TMDB_API_KEY')
 
-# Patrón para cualquier línea EXTINF
-def is_extinf(line):
-    return line.strip().startswith('#EXTINF:')
-
-# Extrae el valor de un atributo tvg-logo
-LOGO_RE = re.compile(r'tvg-logo="(.*?)"')
+# Patrón para líneas EXTINF y tvg-logo
+EXTINF_LINE = re.compile(r'^#EXTINF:.*?,(?P<title>.+)$')
+LOGO_ATTR = re.compile(r'tvg-logo="(.*?)"')
 
 
 def fetch_logo_url(title):
-    """Busca en TMDb el primer resultado de la película y devuelve la URL del póster"""
+    """Busca en TMDb el primer resultado y devuelve la URL del póster"""
+    if not tmdb.api_key:
+        raise RuntimeError("TMDb API key no configurada")
     search = Movie()
     results = search.search(title)
-    if results:
-        poster = results[0].poster_path
-        if poster:
-            return f"https://image.tmdb.org/t/p/w500{poster}"
+    if results and results[0].poster_path:
+        return f"https://image.tmdb.org/t/p/w500{results[0].poster_path}"
     return None
 
 
@@ -32,15 +29,14 @@ def process_m3u(path):
 
     with open(path, 'r', encoding='utf-8') as f:
         for line in f:
-            if is_extinf(line):
-                # Obtener logo actual y título (texto tras la coma)
-                logo_match = LOGO_RE.search(line)
-                if logo_match and logo_match.group(1) == '':
-                    title = line.split(',', 1)[1].strip()
+            m = EXTINF_LINE.match(line)
+            if m:
+                logo_m = LOGO_ATTR.search(line)
+                if logo_m and logo_m.group(1) == '':
+                    title = m.group('title').strip()
                     new_logo = fetch_logo_url(title)
                     if new_logo:
-                        # Reemplaza tvg-logo="" con la URL nueva
-                        line = LOGO_RE.sub(f'tvg-logo="{new_logo}"', line)
+                        line = LOGO_ATTR.sub(f'tvg-logo="{new_logo}"', line)
                         updated = True
             lines_out.append(line)
 
