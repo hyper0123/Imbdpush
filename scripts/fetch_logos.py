@@ -7,10 +7,12 @@ from tmdbv3api import TMDb, Movie
 tmdb = TMDb()
 tmdb.api_key = os.getenv('TMDB_API_KEY')
 
-# Expresión para extraer cada línea EXTINF de tu M3U
-MOVIE_LINE_RE = re.compile(
-    r'(#EXTINF:-1\s+tvg-name="(?P<name>.*?)"\s+tvg-id="(?P<id>.*?)"\s+tvg-logo="(?P<logo>.*?)"\s+group-title="(?P<group>.*?)",(?P<title>.*))'
-)
+# Patrón para cualquier línea EXTINF
+def is_extinf(line):
+    return line.strip().startswith('#EXTINF:')
+
+# Extrae el valor de un atributo tvg-logo
+LOGO_RE = re.compile(r'tvg-logo="(.*?)"')
 
 
 def fetch_logo_url(title):
@@ -25,21 +27,29 @@ def fetch_logo_url(title):
 
 
 def process_m3u(path):
-    lines = []
+    updated = False
+    lines_out = []
+
     with open(path, 'r', encoding='utf-8') as f:
         for line in f:
-            match = MOVIE_LINE_RE.match(line)
-            if match:
-                logo = match.group('logo')
-                title = match.group('title')
-                if not logo:
+            if is_extinf(line):
+                # Obtener logo actual y título (texto tras la coma)
+                logo_match = LOGO_RE.search(line)
+                if logo_match and logo_match.group(1) == '':
+                    title = line.split(',', 1)[1].strip()
                     new_logo = fetch_logo_url(title)
                     if new_logo:
-                        line = re.sub(r'tvg-logo=".*?"', f'tvg-logo="{new_logo}"', line)
-            lines.append(line)
+                        # Reemplaza tvg-logo="" con la URL nueva
+                        line = LOGO_RE.sub(f'tvg-logo="{new_logo}"', line)
+                        updated = True
+            lines_out.append(line)
 
-    with open(path, 'w', encoding='utf-8') as f:
-        f.writelines(lines)
+    if updated:
+        with open(path, 'w', encoding='utf-8') as f:
+            f.writelines(lines_out)
+        print(f"✅ Insertados nuevos logos en {path}")
+    else:
+        print(f"⚠️ No se encontraron entradas sin logo en {path}")
 
 
 if __name__ == '__main__':
