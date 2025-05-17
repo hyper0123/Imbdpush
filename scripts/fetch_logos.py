@@ -32,19 +32,16 @@ def sort_same_name(entries: list[tuple]) -> list[tuple]:
     entries: lista de tuplas (extinf_line, url_line, title_no_year, year)
     """
     def base_name(title: str) -> str:
-        # Quita sufijo numérico (p.ej. '2', '3') al final
         return re.sub(r'\s*\d+$', '', title).strip()
 
-    # Agrupar por base name
     groups: dict[str, list] = {}
     for e in entries:
-        bn = base_name(e[2])  # title_no_year is at index 2
+        bn = base_name(e[2])
         groups.setdefault(bn, []).append(e)
 
-    # Construir resultado ordenado\    sorted_entries: list[tuple] = []
-    for bn, group in groups.items():
+    sorted_entries: list[tuple] = []
+    for _, group in groups.items():
         if len(group) > 1:
-            # Ordenar por año ascendente
             sorted_group = sorted(group, key=lambda x: int(x[3] or 0))
             sorted_entries.extend(sorted_group)
         else:
@@ -72,7 +69,7 @@ def fetch_movie_data(search_title: str) -> dict | None:
         print(f"Error TMDb al buscar '{search_title}': {e}")
         return None
 
-# Función principal de procesamiento
+# Función principal
 def process_m3u(path: str, verbose: bool = False) -> None:
     # Leer líneas del archivo
     with open(path, 'r', encoding='utf-8') as f:
@@ -90,33 +87,32 @@ def process_m3u(path: str, verbose: bool = False) -> None:
                 url_line = lines[i + 1]
 
                 # Extraer atributos originales
-                orig_id = re.search(r'tvg-id="(.*?)"', attrs)
-                orig_logo = re.search(r'tvg-logo="(.*?)"', attrs)
-                orig_group = re.search(r'group-title="(.*?)"', attrs)
-                id_val = orig_id.group(1) if orig_id else ''
-                logo_val = orig_logo.group(1) if orig_logo else ''
-                group_val = orig_group.group(1) if orig_group else ''
+                id_match = re.search(r'tvg-id="(.*?)"', attrs)
+                logo_match = re.search(r'tvg-logo="(.*?)"', attrs)
+                group_match = re.search(r'group-title="(.*?)"', attrs)
+                orig_id = id_match.group(1) if id_match else ''
+                orig_group = group_match.group(1) if group_match else ''
 
-                # Obtener título y año
+                # Normalizar y extraer año
                 title_no_year, year = normalize_and_extract_year(raw_title)
                 search_title = title_no_year
                 if verbose:
-                    print(f"Procesando raw='{raw_title}', search='{search_title}', grupo original='{group_val}'")
+                    print(f"Procesando raw='{raw_title}', search='{search_title}', grupo original='{orig_group}'")
 
                 data = fetch_movie_data(search_title)
                 if data:
                     poster = data['poster']
-                    genre = data['genre'] or group_val
+                    genre = data['genre'] or orig_group
                     title_en = data['title_en']
                     display = f"{title_no_year} ({year})" if year else title_no_year
 
                     # Determinar group-title final
-                    final_group = genre if not group_val or group_val.lower() == 'undefined' else group_val
+                    final_group = genre if not orig_group or orig_group.lower() == 'undefined' else orig_group
 
                     # Construir nueva línea EXTINF
                     attrs_new = (
                         f' tvg-name="{title_en}"'
-                        f' tvg-id="{id_val}"'
+                        f' tvg-id="{orig_id}"'
                         f' tvg-logo="{poster}"'
                         f' group-title="{final_group}"'
                     )
@@ -124,20 +120,22 @@ def process_m3u(path: str, verbose: bool = False) -> None:
                     entries.append((extinf_line, url_line, title_no_year, year))
                     i += 2
                     continue
-        # Si no es entrada válida, conservar en header
+        # Si no es EXTINF
         header_lines.append(line)
         i += 1
 
-    # Ordenar entradas que comparten nombre base
+    # Ordenar entradas con mismo nombre base
     entries = sort_same_name(entries)
 
-    # Escribir archivo de nuevo\    with open(path, 'w', encoding='utf-8') as f:
+    # Escribir de nuevo
+    with open(path, 'w', encoding='utf-8') as f:
         for hl in header_lines:
             f.write(hl)
-        for extinf, url, *_ in entries:
+        for extinf, url_line, *_ in entries:
             f.write(extinf)
-            f.write(url)
+            f.write(url_line)
 
+# Entry point
 def main():
     if len(sys.argv) < 2:
         print("Uso: python fetch_logos.py <ruta/a/tu_playlist.m3u> [--verbose]")
