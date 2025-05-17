@@ -16,12 +16,8 @@ tmdb.api_key = env_api_key
 EXTINF_LINE = re.compile(r'^#EXTINF:-1(.*),(.*)$')
 YEAR_PATTERN = re.compile(r'\s+(\d{4})$')
 
-
+# Funciones auxiliares
 def normalize_and_extract_year(raw: str) -> tuple[str, str]:
-    """
-    Separa el título del año si existe al final (4 dígitos).
-    Devuelve (título_sin_año, año) o (raw, '').
-    """
     m = YEAR_PATTERN.search(raw)
     if m:
         year = m.group(1)
@@ -29,11 +25,9 @@ def normalize_and_extract_year(raw: str) -> tuple[str, str]:
         return title, year
     return raw, ''
 
-
+# TMDb data fetch
 def fetch_movie_data(search_title: str):
-    """Busca película en TMDb y devuelve póster, primer género en español y título original."""
     try:
-        # Buscar con idioma inglés para obtener original_title
         tmdb.language = 'en-US'
         results = Movie().search(search_title)
         if not results:
@@ -42,22 +36,17 @@ def fetch_movie_data(search_title: str):
         poster_url = f"https://image.tmdb.org/t/p/w500{movie.poster_path}" if movie.poster_path else ''
         title_en = movie.original_title or movie.title
 
-        # Obtener géneros en español
         tmdb.language = 'es-ES'
         details = Movie().details(movie.id)
-        genre_list = getattr(details, 'genres', []) or []
-        genre_name = genre_list[0]['name'] if genre_list else ''
+        genres = getattr(details, 'genres', []) or []
+        genre_name = genres[0]['name'] if genres else ''
 
-        return {
-            'poster': poster_url,
-            'genre': genre_name,
-            'title_en': title_en
-        }
+        return {'poster': poster_url, 'genre': genre_name, 'title_en': title_en}
     except Exception as e:
         print(f"Error TMDb al buscar '{search_title}': {e}")
         return None
 
-
+# Proceso principal de M3U
 def process_m3u(path: str, verbose: bool = False) -> None:
     updated = False
     output_lines: list[str] = []
@@ -68,23 +57,30 @@ def process_m3u(path: str, verbose: bool = False) -> None:
                 m = EXTINF_LINE.match(line.strip())
                 if m:
                     attrs, raw_title = m.group(1), m.group(2)
-                    # Extraer id y logo
+                    # Extraer atributos originales
                     orig_id = re.search(r'tvg-id="(.*?)"', attrs)
                     orig_logo = re.search(r'tvg-logo="(.*?)"', attrs)
+                    orig_group = re.search(r'group-title="(.*?)"', attrs)
                     orig_id = orig_id.group(1) if orig_id else ''
                     orig_logo = orig_logo.group(1) if orig_logo else ''
+                    orig_group = orig_group.group(1) if orig_group else ''
 
-                    # Normalizar título y año
+                    # Solo procesar si el grupo es 'undefined' o vacío
+                    if orig_group and orig_group.lower() != 'undefined':
+                        output_lines.append(line)
+                        continue
+
+                    # Normalizar título y extraer año
                     title_no_year, year = normalize_and_extract_year(raw_title)
                     search_title = title_no_year
                     if verbose:
-                        print(f"Buscando: raw='{raw_title}', search='{search_title}'")
+                        print(f"Buscando: raw='{raw_title}', search='{search_title}' (grupo='{orig_group}')")
 
                     data = fetch_movie_data(search_title)
                     if data:
                         # Construir nueva línea EXTINF
                         poster = data['poster']
-                        genre = data['genre']
+                        genre = data['genre'] or orig_group
                         title_en = data['title_en']
                         display = f"{title_no_year} ({year})" if year else title_no_year
                         attrs_new = (
@@ -106,7 +102,6 @@ def process_m3u(path: str, verbose: bool = False) -> None:
             f.writelines(output_lines)
     elif verbose:
         print("No hubo cambios.")
-
 
 if __name__ == '__main__':
     if len(sys.argv) < 2:
