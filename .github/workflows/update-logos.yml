@@ -1,5 +1,9 @@
 name: Update M3U Logos
 
+# Habilitar permisos de escritura para que el bot pueda hacer push
+permissions:
+  contents: write
+
 on:
   workflow_dispatch: {}
   push:
@@ -12,6 +16,9 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          # Por defecto persiste credenciales, permite usar GITHUB_TOKEN
+          persist-credentials: true
 
       - name: Set up Python
         uses: actions/setup-python@v4
