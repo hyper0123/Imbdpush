@@ -12,10 +12,11 @@ if not env_api_key:
 tmdb = TMDb()
 tmdb.api_key = env_api_key
 
-# Patrones\NEXTINF_LINE = re.compile(r'^#EXTINF:-1(.*),(.*)$')
+# Patrones para parsing
+EXTINF_LINE = re.compile(r'^#EXTINF:-1(.*),(.*)$')
 YEAR_PATTERN = re.compile(r'\s+(\d{4})$')
 
-# Normalizar y extraer año
+# Normalizar y extraer año del título raw
 def normalize_and_extract_year(raw: str) -> tuple[str, str]:
     m = YEAR_PATTERN.search(raw)
     if m:
@@ -34,7 +35,7 @@ def sort_same_name(entries: list[tuple]) -> list[tuple]:
         groups.setdefault(bn, []).append(e)
 
     saga_entries, other_entries = [], []
-    for bn, group in groups.items():
+    for group in groups.values():
         if len(group) > 1:
             saga_entries.extend(sorted(group, key=lambda x: x[4]))
         else:
@@ -42,9 +43,10 @@ def sort_same_name(entries: list[tuple]) -> list[tuple]:
     other_entries.sort(key=lambda x: (x[2].lower(), x[4]))
     return saga_entries + other_entries
 
-# Obtener datos de TMDb
+# Obtener datos de TMDb con corrección de año
 def fetch_movie_data(search_title: str) -> dict | None:
     try:
+        # Obtener título original en inglés
         tmdb.language = 'en-US'
         results = Movie().search(search_title)
         if not results:
@@ -53,6 +55,7 @@ def fetch_movie_data(search_title: str) -> dict | None:
         poster = f"https://image.tmdb.org/t/p/w500{movie.poster_path}" if movie.poster_path else ''
         title_en = movie.original_title or movie.title
 
+        # Obtener género y fecha en español
         tmdb.language = 'es-ES'
         details = Movie().details(movie.id)
         genres = getattr(details, 'genres', []) or []
@@ -65,13 +68,14 @@ def fetch_movie_data(search_title: str) -> dict | None:
         print(f"Error TMDb al buscar '{search_title}': {e}")
         return None
 
-# Procesar M3U
+# Procesar archivo M3U
 def process_m3u(path: str, verbose: bool = False) -> None:
+    # Leer todas las líneas del archivo
     with open(path, 'r', encoding='utf-8') as f:
         lines = f.readlines()
 
     header: list[str] = []
-    entries: list[tuple] = []  # (attrs, url, title, raw_year, final_year)
+    entries: list[tuple] = []  # (attrs, url, title, raw_year_int, real_year_int)
     i = 0
     while i < len(lines):
         line = lines[i]
@@ -80,41 +84,62 @@ def process_m3u(path: str, verbose: bool = False) -> None:
             if m:
                 attrs_block, raw = m.group(1), m.group(2)
                 url = lines[i + 1]
+
                 title, raw_year = normalize_and_extract_year(raw)
                 if verbose:
-                    print(f"Buscando '{title}' raw_year={raw_year}")
+                    print(f"Buscando '{title}' (raw year={raw_year})")
+
                 data = fetch_movie_data(title)
                 if data:
-                    real_year = data['year'] or raw_year
-                    final_year = int(real_year) if real_year.isdigit() else 0
-                    orig_group_match = re.search(r'group-title="(.*?)"', attrs_block)
-                    orig_group = orig_group_match.group(1) if orig_group_match else ''
+                    # Año real o raw si no hay real
+                    final_year_str = data['year'] or raw_year
+                    final_year = int(final_year_str) if final_year_str.isdigit() else 0
+
+                    # Determinar group-title
+                    orig_group_m = re.search(r'group-title="(.*?)"', attrs_block)
+                    orig_group = orig_group_m.group(1) if orig_group_m else ''
                     group_final = data['genre'] if not orig_group or orig_group.lower() == 'undefined' else orig_group
-                    # Extraer id
-                    id_match = re.search(r'tvg-id="(.*?)"', attrs_block)
-                    id_val = id_match.group(1) if id_match else ''
-                    # Construir atributos nuevos
+
+                    # Extraer tvg-id
+                    id_m = re.search(r'tvg-id="(.*?)"', attrs_block)
+                    id_val = id_m.group(1) if id_m else ''
+
+                    # Construir atributos nuevos con espacio antes de cada key
                     ext_attrs = (
                         f' tvg-name="{data["title_en"]}"'
                         f' tvg-id="{id_val}"'
                         f' tvg-logo="{data["poster"]}"'
                         f' group-title="{group_final}"'
                     )
+
                     entries.append((ext_attrs, url, title, int(raw_year or 0), final_year))
                     i += 2
                     continue
+        # No es EXTINF o no procesable, guardar como header
         header.append(line)
         i += 1
 
-    # Ordenar y escribir
+    # Ordenar entradas: sagas primero, luego otros
     sorted_entries = sort_same_name(entries)
+
+    # Escribir archivo de nuevo
     with open(path, 'w', encoding='utf-8') as f:
-        f.writelines(header)
+        # Cabecera intacta
+        for hl in header:
+            f.write(hl)
+        # Entradas procesadas y ordenadas
         for attrs, url, title, _, year in sorted_entries:
             display = f"{title} ({year})"
             f.write(f"#EXTINF:-1{attrs},{display}\n")
             f.write(url)
 
-if __name__ == '__main__':
+# Punto de entrada
+def main():
+    if len(sys.argv) < 2:
+        print("Uso: python fetch_logos.py <ruta/a/tu_playlist.m3u> [--verbose]")
+        sys.exit(1)
     verbose_flag = '--verbose' in sys.argv
     process_m3u(sys.argv[1], verbose=verbose_flag)
+
+if __name__ == '__main__':
+    main()
