@@ -12,8 +12,7 @@ if not env_api_key:
 tmdb = TMDb()
 tmdb.api_key = env_api_key
 
-# Patrones
-EXTINF_LINE = re.compile(r'^#EXTINF:-1(.*),(.*)$')
+# Patrones\NEXTINF_LINE = re.compile(r'^#EXTINF:-1(.*),(.*)$')
 YEAR_PATTERN = re.compile(r'\s+(\d{4})$')
 
 # Normalizar y extraer año
@@ -34,8 +33,7 @@ def sort_same_name(entries: list[tuple]) -> list[tuple]:
         bn = base_name(e[2])
         groups.setdefault(bn, []).append(e)
 
-    saga_entries = []
-    other_entries = []
+    saga_entries, other_entries = [], []
     for bn, group in groups.items():
         if len(group) > 1:
             saga_entries.extend(sorted(group, key=lambda x: x[4]))
@@ -95,7 +93,7 @@ def process_m3u(path: str, verbose: bool = False) -> None:
                     # Extraer id
                     id_match = re.search(r'tvg-id="(.*?)"', attrs_block)
                     id_val = id_match.group(1) if id_match else ''
-                    # Construir atributos nuevo
+                    # Construir atributos nuevos
                     ext_attrs = (
                         f' tvg-name="{data["title_en"]}"'
                         f' tvg-id="{id_val}"'
@@ -108,7 +106,8 @@ def process_m3u(path: str, verbose: bool = False) -> None:
         header.append(line)
         i += 1
 
-    # Ordenar y escribir\sorted_entries = sort_same_name(entries)
+    # Ordenar y escribir
+    sorted_entries = sort_same_name(entries)
     with open(path, 'w', encoding='utf-8') as f:
         f.writelines(header)
         for attrs, url, title, _, year in sorted_entries:
