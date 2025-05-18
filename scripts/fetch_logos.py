@@ -16,132 +16,102 @@ tmdb.api_key = env_api_key
 EXTINF_LINE = re.compile(r'^#EXTINF:-1(.*),(.*)$')
 YEAR_PATTERN = re.compile(r'\s+(\d{4})$')
 
-# Función para extraer título sin año y año
+# Normaliza y extrae año raw
 def normalize_and_extract_year(raw: str) -> tuple[str, str]:
     m = YEAR_PATTERN.search(raw)
     if m:
-        return raw[:m.start()].strip(), m.group(1)
-    return raw.strip(), ''
+        return YEAR_PATTERN.sub('', raw).strip(), m.group(1)
+    return raw, ''
 
-# Función fuzzy para correcciones básicas
-def generate_variations(title: str) -> list[str]:
-    variations = [title]
-    # reemplazar ' and ' por ' & '
-    if re.search(r' and ', title, re.IGNORECASE):
-        variations.append(re.sub(r' and ', ' & ', title, flags=re.IGNORECASE))
-    # asegurar espacio antes del año
-    variations.append(re.sub(r"(\D)(\d{4})$", r"\1 \2", title))
-    return list(dict.fromkeys(variations))
+# Ordena grupos con mismo basename
+def sort_same_name(entries: list[tuple]) -> list[tuple]:
+    def base_name(title: str) -> str:
+        return re.sub(r'\s*\d+$', '', title).strip().lower()
+    groups = {}
+    for e in entries:
+        bn = base_name(e[2])
+        groups.setdefault(bn, []).append(e)
+    # Sagas primero: grupos>1
+    saga_entries, other_entries = [], []
+    for bn, group in groups.items():
+        if len(group) > 1:
+            # orden por año
+            saga_entries.extend(sorted(group, key=lambda x: x[4]))
+        else:
+            other_entries.extend(group)
+    # mantener orden relativo de otros
+    return saga_entries + sorted(other_entries, key=lambda x: (x[2].lower(), x[4]))
 
-# Obtener datos de TMDb con fallback fuzzy
+# Busca datos en TMDb y corrige título y año
 def fetch_movie_data(search_title: str) -> dict | None:
     try:
-        tmdb.language = 'en-US'
-        for variant in generate_variations(search_title):
-            results = Movie().search(variant)
-            if results:
-                movie = results[0]
-                poster = f"https://image.tmdb.org/t/p/w500{movie.poster_path}" if movie.poster_path else ''
-                title_en = movie.original_title or movie.title
-                tmdb.language = 'es-ES'
-                details = Movie().details(movie.id)
-                genres = getattr(details, 'genres', []) or []
-                genre_name = genres[0]['name'] if genres else ''
-                return {'poster': poster, 'genre': genre_name, 'title_en': title_en}
-        return None
+        # Inglés para título original
+tmdb.language = 'en-US'
+        results = Movie().search(search_title)
+        if not results:
+            return None
+        movie = results[0]
+        # URL póster
+        poster = f"https://image.tmdb.org/t/p/w500{movie.poster_path}" if movie.poster_path else ''
+        title_en = movie.original_title or movie.title
+        # Español para géneros y fecha
+        tmdb.language = 'es-ES'
+        details = Movie().details(movie.id)
+        genres = getattr(details, 'genres', []) or []
+        genre = genres[0]['name'] if genres else ''
+        # Extraer año real de release_date
+        rd = getattr(details, 'release_date', '')
+        real_year = rd.split('-')[0] if rd else ''
+        return {'poster': poster, 'genre': genre, 'title_en': title_en, 'year': real_year}
     except Exception as e:
         print(f"Error TMDb al buscar '{search_title}': {e}")
         return None
 
-# Función para ordenar sagas y demás
-def sort_and_group(entries: list[dict]) -> tuple[list[dict], list[dict]]:
-    # Identificar sagas (mismo base_name múltiples veces)
-    def base_name(t: str) -> str:
-        return re.sub(r"\s+\d+$", '', t).strip()
-
-    counts = {}
-    for e in entries:
-        bn = base_name(e['title'])
-        counts[bn] = counts.get(bn, 0) + 1
-
-    saga_entries = []
-    other_entries = []
-    for e in entries:
-        if counts[base_name(e['title'])] > 1:
-            saga_entries.append(e)
-        else:
-            other_entries.append(e)
-
-    saga_entries.sort(key=lambda x: (base_name(x['title']), int(x['year'] or 0)))
-    other_entries.sort(key=lambda x: x['title_en'])
-
-    return saga_entries, other_entries
-
-# Función principal
+# Procesa M3U
 def process_m3u(path: str, verbose: bool = False) -> None:
-    lines = open(path, 'r', encoding='utf-8').readlines()
-    header = []
-    entries = []  # dicts con keys: title, year, id, poster, genre, title_en, url
-
+    with open(path, 'r', encoding='utf-8') as f:
+        lines = f.readlines()
+    header, entries = [], []  # entries: (extinf_attrs, url, raw_tny, raw_yr, real_yr)
     i = 0
     while i < len(lines):
         line = lines[i]
-        if line.startswith('#EXTINF') and i + 1 < len(lines):
+        if line.startswith('#EXTINF') and i+1 < len(lines):
             m = EXTINF_LINE.match(line.strip())
             if m:
-                attrs, raw_title = m.groups()
-                url_line = lines[i + 1]
-                id_match = re.search(r'tvg-id="(.*?)"', attrs)
-                group_match = re.search(r'group-title="(.*?)"', attrs)
-                id_val = id_match.group(1) if id_match else ''
-                group_val = group_match.group(1) if group_match else ''
-                title_no_year, year = normalize_and_extract_year(raw_title)
+                attrs, raw = m.group(1), m.group(2)
+                url = lines[i+1]
+                title_no_year, raw_year = normalize_and_extract_year(raw)
                 if verbose:
-                    print(f"Procesando: '{raw_title}' -> '{title_no_year}', año='{year}', grupo='{group_val}'")
-                data = fetch_movie_data(title_no_year) or fetch_movie_data(raw_title)
+                    print(f"Buscando '{title_no_year}' (raw '{raw}'), orig_year={raw_year}")
+                data = fetch_movie_data(title_no_year)
                 if data:
-                    entries.append({
-                        'title': title_no_year,
-                        'year': year,
-                        'id': id_val,
-                        'poster': data['poster'],
-                        'genre': data['genre'] or group_val,
-                        'title_en': data['title_en'],
-                        'url': url_line
-                    })
+                    # elegir año corregido o raw si no disponible
+t = data['year'] or raw_year
+                    # construir attrs nuevos, corrigiendo group solo si undefined
+                    orig_group = re.search(r'group-title="(.*?)"', attrs)
+                    orig_group = orig_group.group(1) if orig_group else ''
+                    grp = data['genre'] if not orig_group or orig_group.lower()=='undefined' else orig_group
+                    ext_attrs = (
+                        f' tvg-name="{data["title_en"]}"'
+                        f' tvg-id="{re.search(r\\'tvg-id=\\"(.*?)\\"\\', attrs).group(1) or ""}"'
+                        f' tvg-logo="{data["poster"]}"'
+                        f' group-title="{grp}"'
+                    )
+                    entries.append((ext_attrs, url, title_no_year, int(raw_year or 0), int(t or 0)))
                     i += 2
                     continue
         header.append(line)
         i += 1
-
-    saga_entries, other_entries = sort_and_group(entries)
-
+    # ordenar entries
+    sorted_entries = sort_same_name(entries)
+    # escribir fichero
     with open(path, 'w', encoding='utf-8') as f:
-        for h in header:
-            f.write(h)
-        # Primero sagas
-        for e in saga_entries:
-            display = f"{e['title']} ({e['year']})" if e['year'] else e['title']
-            attrs = (
-                f' tvg-name="{e['title_en']}"'
-                f' tvg-id="{e['id']}"'
-                f' tvg-logo="{e['poster']}"'
-                f' group-title="Sagas"'
-            )
-            f.write(f"#EXTINF:-1{attrs},{display}\n")
-            f.write(e['url'])
-        # Luego los demás
-        for e in other_entries:
-            display = f"{e['title']} ({e['year']})" if e['year'] else e['title']
-            attrs = (
-                f' tvg-name="{e['title_en']}"'
-                f' tvg-id="{e['id']}"'
-                f' tvg-logo="{e['poster']}"'
-                f' group-title="{e['genre']}"'
-            )
-            f.write(f"#EXTINF:-1{attrs},{display}\n")
-            f.write(e['url'])
+        f.writelines(header)
+        for attrs, url, title, _, real in sorted_entries:
+            disp = f"{title} ({real})"
+            f.write(f"#EXTINF:-1{attrs},{disp}\n")
+            f.write(url)
 
 if __name__ == '__main__':
-    verbose = '--verbose' in sys.argv
-    process_m3u(sys.argv[1], verbose)
+    v = '--verbose' in sys.argv
+    process_m3u(sys.argv[1], verbose=v)
