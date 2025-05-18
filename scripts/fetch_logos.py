@@ -29,7 +29,6 @@ def sort_same_name(entries: list[tuple]) -> list[tuple]:
     def base_name(title: str) -> str:
         return re.sub(r'\s*\d+$', '', title).strip().lower()
 
-    # Agrupar
     groups: dict[str, list] = {}
     for e in entries:
         bn = base_name(e[2])
@@ -42,7 +41,6 @@ def sort_same_name(entries: list[tuple]) -> list[tuple]:
             saga_entries.extend(sorted(group, key=lambda x: x[4]))
         else:
             other_entries.extend(group)
-    # Ordenar otros por título y año
     other_entries.sort(key=lambda x: (x[2].lower(), x[4]))
     return saga_entries + other_entries
 
@@ -75,15 +73,15 @@ def process_m3u(path: str, verbose: bool = False) -> None:
         lines = f.readlines()
 
     header: list[str] = []
-    entries: list[tuple] = []  # (attrs, url, title, raw_year, real_year)
+    entries: list[tuple] = []  # (attrs, url, title, raw_year, final_year)
     i = 0
     while i < len(lines):
         line = lines[i]
-        if line.startswith('#EXTINF') and i+1 < len(lines):
+        if line.startswith('#EXTINF') and i + 1 < len(lines):
             m = EXTINF_LINE.match(line.strip())
             if m:
-                attrs, raw = m.group(1), m.group(2)
-                url = lines[i+1]
+                attrs_block, raw = m.group(1), m.group(2)
+                url = lines[i + 1]
                 title, raw_year = normalize_and_extract_year(raw)
                 if verbose:
                     print(f"Buscando '{title}' raw_year={raw_year}")
@@ -91,14 +89,18 @@ def process_m3u(path: str, verbose: bool = False) -> None:
                 if data:
                     real_year = data['year'] or raw_year
                     final_year = int(real_year) if real_year.isdigit() else 0
-                    orig_group = re.search(r'group-title="(.*?)"', attrs)
-                    orig_group = orig_group.group(1) if orig_group else ''
-                    group = data['genre'] if not orig_group or orig_group.lower()=='undefined' else orig_group
+                    orig_group_match = re.search(r'group-title="(.*?)"', attrs_block)
+                    orig_group = orig_group_match.group(1) if orig_group_match else ''
+                    group_final = data['genre'] if not orig_group or orig_group.lower() == 'undefined' else orig_group
+                    # Extraer id
+                    id_match = re.search(r'tvg-id="(.*?)"', attrs_block)
+                    id_val = id_match.group(1) if id_match else ''
+                    # Construir atributos nuevo
                     ext_attrs = (
                         f' tvg-name="{data["title_en"]}"'
-                        f' tvg-id="{re.search(r\\'tvg-id=\\"(.*?)\\"\\', attrs).group(1) if re.search(r\\'tvg-id=\\"(.*?)\\"\\', attrs) else ""}"'
+                        f' tvg-id="{id_val}"'
                         f' tvg-logo="{data["poster"]}"'
-                        f' group-title="{group}"'
+                        f' group-title="{group_final}"'
                     )
                     entries.append((ext_attrs, url, title, int(raw_year or 0), final_year))
                     i += 2
@@ -106,15 +108,14 @@ def process_m3u(path: str, verbose: bool = False) -> None:
         header.append(line)
         i += 1
 
-    # Ordenar y escribir
-    sorted_entries = sort_same_name(entries)
+    # Ordenar y escribir\sorted_entries = sort_same_name(entries)
     with open(path, 'w', encoding='utf-8') as f:
         f.writelines(header)
-        for attrs, url, title, _, ry in sorted_entries:
-            display = f"{title} ({ry})"
+        for attrs, url, title, _, year in sorted_entries:
+            display = f"{title} ({year})"
             f.write(f"#EXTINF:-1{attrs},{display}\n")
             f.write(url)
 
 if __name__ == '__main__':
-    v = '--verbose' in sys.argv
-    process_m3u(sys.argv[1], verbose=v)
+    verbose_flag = '--verbose' in sys.argv
+    process_m3u(sys.argv[1], verbose=verbose_flag)
